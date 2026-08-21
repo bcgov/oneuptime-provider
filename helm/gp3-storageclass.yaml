@@ -1,0 +1,20 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    # Make gp3 the default so PVCs created by the OneUptime chart's
+    # PostgreSQL/Redis/ClickHouse sub-charts pick it up automatically.
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
+  # Tag every EBS volume the CSI driver provisions for this class (the
+  # PostgreSQL/Redis/ClickHouse PVCs) so they roll up under the same
+  # expense-tracking tags as the Terraform-managed cluster resources —
+  # these volumes are created outside Terraform and wouldn't otherwise be
+  # tagged. Keep in sync with the `tags` in terraform/variables.tf.
+  tagSpecification_1: "Project=oneuptime"
+  tagSpecification_2: "CostTracking=oneuptime"
+  tagSpecification_3: "ManagedBy=eks-ebs-csi-driver"

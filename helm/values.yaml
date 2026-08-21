@@ -1,0 +1,123 @@
+# OneUptime Helm chart values — AWS EKS, small/dev-sized deployment.
+#
+# This targets a single-node-friendly, "get it running" install: built-in
+# standalone PostgreSQL, Redis and ClickHouse (no HA operators), single
+# replicas, plain HTTP over the AWS-provisioned Network Load Balancer
+# hostname (no custom domain / TLS yet).
+#
+# See ../docs/deploy-aws.md for the two-step install (the `host` below has to
+# be updated to the real LoadBalancer hostname after the first install).
+#
+# Upstream reference:
+# https://github.com/OneUptime/oneuptime/blob/master/HelmChart/Public/oneuptime/values.yaml
+
+global:
+  # Created by terraform/main.tf (aws-ebs-csi-driver addon) + helm/gp3-storageclass.yaml.
+  storageClass: "gp3"
+
+# Placeholder for the very first install — helm needs *some* value here.
+# After the first `helm install`, run:
+#   kubectl get svc <release-name>-nginx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+# and set `host` to that hostname, then `helm upgrade` (see docs/deploy-aws.md).
+host: "localhost"
+
+# No TLS certificate yet — served over plain HTTP via the NLB hostname.
+httpProtocol: http
+ssl:
+  provision: false
+
+# Long random strings — generate with `openssl rand -hex 32` and paste in,
+# or leave blank to let the chart auto-generate and persist them on install.
+oneuptimeSecret: ""
+encryptionSecret: ""
+
+nodeEnvironment: production
+logLevel: ERROR
+
+# --- Networking -------------------------------------------------------------
+# AWS provisions a Classic/Network Load Balancer for this Service and assigns
+# a public hostname automatically — no need to reserve an IP up front. The
+# additional-resource-tags annotation tags that load balancer (an AWS
+# resource created outside Terraform, by the in-tree cloud provider) so it
+# rolls up under the same expense-tracking tags as everything else. Keep in
+# sync with the `tags` in terraform/variables.tf.
+#
+# The subnets annotation is required because this platform's VPC/subnets are
+# platform-managed and cannot be tagged by users, so the usual
+# kubernetes.io/role/elb auto-discovery tagging isn't available — the subnets
+# must be listed explicitly instead. Get the IDs from `terraform output
+# subnet_ids` after `terraform apply` (see terraform/data.tf, which resolves
+# them from `var.vpc_name`/`var.subnet_a`/`var.subnet_b`).
+nginx:
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "Project=oneuptime,CostTracking=oneuptime"
+      service.beta.kubernetes.io/aws-load-balancer-subnets: "subnet-REPLACE_ME_PUBLIC_A,subnet-REPLACE_ME_PUBLIC_B,subnet-REPLACE_ME_PUBLIC_C"
+
+# --- Images -------------------------------------------------------------
+image:
+  registry: docker.io
+  repository: oneuptime
+  # Pin this to a specific released version before going to production.
+  # https://github.com/OneUptime/oneuptime/releases
+  tag: release
+  pullPolicy: IfNotPresent
+  type: community-edition
+
+# --- Databases (built-in, standalone — fine for dev/small workloads) --------
+postgresql:
+  enabled: true
+  auth:
+    username: oneuptime
+    database: oneuptimedb
+    # Leave blank to auto-generate; set a static value before production use.
+    password: ""
+  architecture: standalone
+  primary:
+    persistence:
+      enabled: true
+      size: 25Gi
+      storageClass: "gp3"
+
+redis:
+  enabled: true
+  auth:
+    # Leave blank to auto-generate; set a static value before production use.
+    password: ""
+  master:
+    persistence:
+      enabled: false
+      size: 8Gi
+      storageClass: "gp3"
+
+clickhouse:
+  enabled: true
+  auth:
+    username: oneuptime
+    # Leave blank to auto-generate; set a static value before production use.
+    password: ""
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: "gp3"
+
+# --- Scaling ------------------------------------------------------------
+# Single replica everywhere by default — bump these once you outgrow a
+# dev/small deployment (see production-checklist.md upstream).
+deployment:
+  replicaCount: 1
+
+autoscaling:
+  enabled: false
+
+worker:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+
+# Telemetry the vast magjority of the resources used are telemetry storrage, we do not need this.
+telemetry:
+  disableIngestion: true
