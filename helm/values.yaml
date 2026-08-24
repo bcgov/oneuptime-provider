@@ -28,8 +28,8 @@ ssl:
 
 # Long random strings — generate with `openssl rand -hex 32` and paste in,
 # or leave blank to let the chart auto-generate and persist them on install.
-oneuptimeSecret: ""
-encryptionSecret: ""
+oneuptimeSecret: 
+encryptionSecret: 
 
 nodeEnvironment: production
 logLevel: ERROR
@@ -53,7 +53,11 @@ nginx:
     type: LoadBalancer
     annotations:
       service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "Project=oneuptime,CostTracking=oneuptime"
-      service.beta.kubernetes.io/aws-load-balancer-subnets: "subnet-REPLACE_ME_PUBLIC_A,subnet-REPLACE_ME_PUBLIC_B,subnet-REPLACE_ME_PUBLIC_C"
+      service.beta.kubernetes.io/aws-load-balancer-subnets: 
+      # This platform's subnets are private (no Internet Gateway), so an
+      # internet-facing load balancer can't be provisioned in them — request
+      # an internal one instead.
+      service.beta.kubernetes.io/aws-load-balancer-internal: "true"
 
 # --- Images -------------------------------------------------------------
 image:
@@ -69,11 +73,11 @@ image:
 postgresql:
   enabled: true
   auth:
-    username: oneuptime
     database: oneuptimedb
-    # Leave blank to auto-generate; set a static value before production use.
-    password: ""
-  architecture: standalone
+    # Leave null to auto-generate; set a static value before production use.
+    # Note: this chart uses a fixed built-in "postgres" superuser (no
+    # separate application username is configurable).
+    postgresPassword: null
   primary:
     persistence:
       enabled: true

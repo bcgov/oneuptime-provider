@@ -10,6 +10,10 @@ provisioner: ebs.csi.aws.com
 volumeBindingMode: WaitForFirstConsumer
 parameters:
   type: gp3
+  # Many government/landing-zone AWS accounts enforce an SCP guardrail that
+  # denies ec2:CreateVolume for unencrypted volumes. Encrypt at rest with the
+  # account's default EBS KMS key.
+  encrypted: "true"
   # Tag every EBS volume the CSI driver provisions for this class (the
   # PostgreSQL/Redis/ClickHouse PVCs) so they roll up under the same
   # expense-tracking tags as the Terraform-managed cluster resources —
