@@ -2,11 +2,11 @@
 #
 # This targets a single-node-friendly, "get it running" install: built-in
 # standalone PostgreSQL, Redis and ClickHouse (no HA operators), single
-# replicas, plain HTTP over the AWS-provisioned Network Load Balancer
-# hostname (no custom domain / TLS yet).
+# replicas, plain HTTP over an internal ALB hostname (no custom domain / TLS
+# yet).
 #
 # See ../docs/deploy-aws.md for the two-step install (the `host` below has to
-# be updated to the real LoadBalancer hostname after the first install).
+# be updated to the real ALB hostname after the first install).
 #
 # Upstream reference:
 # https://github.com/OneUptime/oneuptime/blob/master/HelmChart/Public/oneuptime/values.yaml
@@ -17,11 +17,11 @@ global:
 
 # Placeholder for the very first install — helm needs *some* value here.
 # After the first `helm install`, run:
-#   kubectl get svc <release-name>-nginx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+#   kubectl get ingress <release-name>-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
 # and set `host` to that hostname, then `helm upgrade` (see docs/deploy-aws.md).
-host: "localhost"
+host: "internal-k8s-default-myoneupt-25100a5ad3-1464245318.ca-central-1.elb.amazonaws.com"
 
-# No TLS certificate yet — served over plain HTTP via the NLB hostname.
+# No TLS certificate yet — served over plain HTTP via the ALB hostname.
 httpProtocol: http
 ssl:
   provision: false
@@ -35,29 +35,27 @@ nodeEnvironment: production
 logLevel: ERROR
 
 # --- Networking -------------------------------------------------------------
-# AWS provisions a Classic/Network Load Balancer for this Service and assigns
-# a public hostname automatically — no need to reserve an IP up front. The
-# additional-resource-tags annotation tags that load balancer (an AWS
-# resource created outside Terraform, by the in-tree cloud provider) so it
-# rolls up under the same expense-tracking tags as everything else. Keep in
-# sync with the `tags` in terraform/variables.tf.
-#
-# The subnets annotation is required because this platform's VPC/subnets are
-# platform-managed and cannot be tagged by users, so the usual
-# kubernetes.io/role/elb auto-discovery tagging isn't available — the subnets
-# must be listed explicitly instead. Get the IDs from `terraform output
-# subnet_ids` after `terraform apply` (see terraform/data.tf, which resolves
-# them from `var.vpc_name`/`var.subnet_a`/`var.subnet_b`).
+# This platform's VPC/subnets have no Internet Gateway, so a classic/network
+# LoadBalancer Service (internet-facing or internal) can't reach the
+# internet-facing perimeter automation this platform (LZA) requires — see
+# instructions.md. Instead, the nginx Service is kept ClusterIP-only and
+# exposed through an internal ALB via the separate Ingress resource in
+# helm/ingress.yaml (Pattern A: Kubernetes-managed ALB via the AWS Load
+# Balancer Controller), which LZA's perimeter public ALB then fronts.
 nginx:
   service:
-    type: LoadBalancer
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "Project=oneuptime,CostTracking=oneuptime"
-      service.beta.kubernetes.io/aws-load-balancer-subnets: 
-      # This platform's subnets are private (no Internet Gateway), so an
-      # internet-facing load balancer can't be provisioned in them — request
-      # an internal one instead.
-      service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    type: ClusterIP
+  # The chart's default nginx server_names_hash_bucket_size (64) is too small
+  # for this platform's long internal ALB hostname (~86 chars,
+  # e.g. internal-k8s-default-myoneupt-<id>.<region>.elb.amazonaws.com),
+  # which makes nginx fail to start with:
+  #   "could not build server_names_hash, you should increase
+  #   server_names_hash_bucket_size: 64"
+  # 128 comfortably covers hostnames of this length; bump further if `host`
+  # ever gets longer.
+  serverNamesHash:
+    bucketSize: "128"
+
 
 # --- Images -------------------------------------------------------------
 image:

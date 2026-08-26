@@ -116,3 +116,41 @@ resource "aws_eks_pod_identity_association" "ebs_csi_driver" {
   service_account = "ebs-csi-controller-sa"
   role_arn        = aws_iam_role.ebs_csi_driver.arn
 }
+
+###############################################################################
+# EKS Pod Identity role for the AWS Load Balancer Controller
+###############################################################################
+# LZA (this platform's AWS Landing Zone Accelerator) requires internet-bound
+# traffic to reach EKS through an *internal* ALB fronted by the perimeter's
+# public ALB — see instructions.md, Pattern A. The AWS Load Balancer
+# Controller (installed via Helm — see docs/deploy-aws.md) owns/creates that
+# internal ALB via a Kubernetes Ingress. Like the EBS CSI driver, its IAM
+# permissions are granted via EKS Pod Identity rather than IRSA, since SCPs
+# on this platform block creating IAM OIDC providers.
+
+resource "aws_iam_policy" "aws_load_balancer_controller" {
+  name        = "${var.cluster_name}-aws-load-balancer-controller"
+  description = "Permissions for the AWS Load Balancer Controller to manage ALBs/NLBs (upstream policy from kubernetes-sigs/aws-load-balancer-controller)."
+  policy      = file("${path.module}/policies/aws-load-balancer-controller-iam-policy.json")
+
+  tags = var.tags
+}
+
+resource "aws_iam_role" "aws_load_balancer_controller" {
+  name               = "${var.cluster_name}-aws-load-balancer-controller"
+  assume_role_policy = data.aws_iam_policy_document.ebs_csi_pod_identity_assume_role.json
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "aws_load_balancer_controller" {
+  role       = aws_iam_role.aws_load_balancer_controller.name
+  policy_arn = aws_iam_policy.aws_load_balancer_controller.arn
+}
+
+resource "aws_eks_pod_identity_association" "aws_load_balancer_controller" {
+  cluster_name    = module.eks.cluster_name
+  namespace       = "kube-system"
+  service_account = "aws-load-balancer-controller"
+  role_arn        = aws_iam_role.aws_load_balancer_controller.arn
+}

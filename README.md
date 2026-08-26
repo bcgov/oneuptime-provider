@@ -35,10 +35,10 @@ This repo was generated based on the following choices (see
   existing cluster).
 - A **small/dev-sized** deployment: built-in standalone PostgreSQL, Redis and
   ClickHouse, single replicas — not the HA operator-backed production setup.
-- **No custom domain yet** — OneUptime is served over plain HTTP via the
-  AWS-provisioned load balancer's public hostname. Add a domain + TLS once
-  you have one (see `docs/deploy-aws.md`).
+- **No custom domain yet** — OneUptime is served over plain HTTP via an
+  internal ALB's hostname. Add a domain + TLS once you have one (see
+  `docs/deploy-aws.md`).
 - **Tagged for expense tracking** — every AWS resource created or used by
-  OneUptime (VPC/EKS via Terraform, EBS volumes, and the load balancer) is
+  OneUptime (VPC/EKS via Terraform, EBS volumes, and the ALB) is
   tagged `Project=oneuptime` / `CostTracking=oneuptime`, so its spend rolls up
   cleanly in Cost Explorer (see `docs/deploy-aws.md` "Tagging").
