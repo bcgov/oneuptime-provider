@@ -1,0 +1,148 @@
+# OneUptime Helm chart values — AWS EKS, small/dev-sized deployment.
+#
+# This targets a single-node-friendly, "get it running" install: built-in
+# standalone PostgreSQL, Redis and ClickHouse (no HA operators), single
+# replicas. TLS is terminated at the ALB using the platform's ACM cert (LZA
+# requires HTTPS-only public endpoints — see helm/ingress.yaml); nginx/the
+# app itself only speak plain HTTP behind it (no custom domain / app-managed
+# TLS yet).
+#
+# See ../docs/deploy-aws.md for the two-step install (the `host` below has to
+# be updated to the real ALB hostname after the first install).
+#
+# Upstream reference:
+# https://github.com/OneUptime/oneuptime/blob/master/HelmChart/Public/oneuptime/values.yaml
+
+global:
+  # Created by terraform/main.tf (aws-ebs-csi-driver addon) + helm/gp3-storageclass.yaml.
+  storageClass: "gp3"
+
+# Placeholder for the very first install — helm needs *some* value here.
+#
+# IMPORTANT: this must be the hostname you actually browse to, not the raw
+# internal ALB DNS name. On this platform that's LZA's public perimeter
+# hostname, derived from the ALB's `PublicHost` tag (see
+# ../instructions-2.md):
+#   <PublicHost-label>.<your-account>.stratus.cloud.gov.bc.ca
+# e.g. oneuptime.b46814-dev.stratus.cloud.gov.bc.ca
+#
+# OneUptime resolves the app/status-page based on the browser's Host header,
+# so if `host` here doesn't match exactly, requests fall through to
+# status-page domain lookup and fail with "Status Page ID not found". After
+# setting `alb.ingress.kubernetes.io/tags` (PublicHost=...) in
+# helm/ingress.yaml and confirming the public DNS mapping resolves, set
+# `host` to that public hostname, then `helm upgrade` (see docs/deploy-aws.md).
+host: "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
+
+# The ALB terminates TLS (LZA requires public endpoints to be HTTPS-only —
+# see helm/ingress.yaml's certificate-arn annotation), so the browser always
+# reaches this over https:// even though nginx/the app itself only speak
+# plain HTTP behind the ALB. `httpProtocol` must reflect what the *browser*
+# uses, not the backend transport — OneUptime bakes this into client-side
+# JS as the base URL for its own API calls. Setting this to `http` while
+# actually being served over https:// causes the browser to block those
+# API calls as mixed content, surfacing as a generic "Network Error" with no
+# server-side trace at all.
+httpProtocol: https
+ssl:
+  # We're not asking the chart to provision/manage a cert — the ALB already
+  # terminates TLS using the platform's ACM cert (see helm/ingress.yaml).
+  provision: false
+
+# Long random strings — generate with `openssl rand -hex 32` and paste in,
+# or leave blank to let the chart auto-generate and persist them on install.
+oneuptimeSecret: 
+encryptionSecret: 
+
+nodeEnvironment: production
+logLevel: ERROR
+
+# --- Networking -------------------------------------------------------------
+# This platform's VPC/subnets have no Internet Gateway, so a classic/network
+# LoadBalancer Service (internet-facing or internal) can't reach the
+# internet-facing perimeter automation this platform (LZA) requires — see
+# instructions.md. Instead, the nginx Service is kept ClusterIP-only and
+# exposed through an internal ALB via the separate Ingress resource in
+# helm/ingress.yaml (Pattern A: Kubernetes-managed ALB via the AWS Load
+# Balancer Controller), which LZA's perimeter public ALB then fronts.
+nginx:
+  service:
+    type: ClusterIP
+  # The chart's default nginx server_names_hash_bucket_size (64) is too small
+  # for this platform's long internal ALB hostname (~86 chars,
+  # e.g. internal-k8s-default-myoneupt-<id>.<region>.elb.amazonaws.com),
+  # which makes nginx fail to start with:
+  #   "could not build server_names_hash, you should increase
+  #   server_names_hash_bucket_size: 64"
+  # 128 comfortably covers hostnames of this length; bump further if `host`
+  # ever gets longer.
+  serverNamesHash:
+    bucketSize: "128"
+
+
+# --- Images -------------------------------------------------------------
+image:
+  registry: docker.io
+  repository: oneuptime
+  # Pin this to a specific released version before going to production.
+  # https://github.com/OneUptime/oneuptime/releases
+  tag: release
+  pullPolicy: IfNotPresent
+  type: community-edition
+
+# --- Databases (built-in, standalone — fine for dev/small workloads) --------
+postgresql:
+  enabled: true
+  auth:
+    database: oneuptimedb
+    # Leave null to auto-generate; set a static value before production use.
+    # Note: this chart uses a fixed built-in "postgres" superuser (no
+    # separate application username is configurable).
+    postgresPassword: null
+  primary:
+    persistence:
+      enabled: true
+      size: 25Gi
+      storageClass: "gp3"
+
+redis:
+  enabled: true
+  auth:
+    # Leave blank to auto-generate; set a static value before production use.
+    password: ""
+  master:
+    persistence:
+      enabled: false
+      size: 8Gi
+      storageClass: "gp3"
+
+clickhouse:
+  enabled: true
+  auth:
+    username: oneuptime
+    # Leave blank to auto-generate; set a static value before production use.
+    password: ""
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: "gp3"
+
+# --- Scaling ------------------------------------------------------------
+# Single replica everywhere by default — bump these once you outgrow a
+# dev/small deployment (see production-checklist.md upstream https://github.com/OneUptime/oneuptime/blob/master/HelmChart/Public/oneuptime/docs/production-checklist.md).
+deployment:
+  replicaCount: 1
+
+autoscaling:
+  enabled: false
+
+worker:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+
+# Telemetry the vast magjority of the resources used are telemetry storrage, we do not need this.
+telemetry:
+  disableIngestion: true

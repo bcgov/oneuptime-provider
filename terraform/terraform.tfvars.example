@@ -1,0 +1,31 @@
+# Copy this file to terraform.tfvars and adjust as needed.
+
+# Platform constraint: only ca-central-1 is supported.
+aws_region      = "ca-central-1"
+cluster_name    = "oneuptime"
+cluster_version = "1.30"
+
+# Platform-managed VPC/subnets, looked up by Name tag (see terraform/data.tf)
+# — set these to match your environment. You cannot create or modify
+# VPCs/subnets yourself. Only one subnet tier exists on this platform and is
+# used for both the EKS cluster and the load balancer.
+vpc_name = "Dev"
+subnet_a = "Dev-App-A"
+subnet_b = "Dev-App-B"
+
+node_instance_types     = ["m6i.xlarge"]
+node_group_min_size     = 2
+node_group_max_size     = 4
+node_group_desired_size = 2
+
+# Public hostname OneUptime is browsed at — must match helm/values.yaml's
+# `host`. Used by coredns.tf to rewrite in-cluster DNS lookups for this
+# hostname to the OneUptime nginx Service (see that file for why).
+oneuptime_public_host = "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
+
+tags = {
+  Project      = "oneuptime"
+  Environment  = "dev"
+  ManagedBy    = "terraform"
+  CostTracking = "oneuptime"
+}

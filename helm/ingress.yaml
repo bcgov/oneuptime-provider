@@ -1,0 +1,54 @@
+# Internal ALB for OneUptime, satisfying this platform's LZA requirements
+# (see ../instructions.md, Pattern A — Kubernetes-managed ALB via the AWS
+# Load Balancer Controller):
+#   - alb.ingress.kubernetes.io/tags includes Public=True, so LZA's perimeter
+#     automation discovers this ALB and fronts it with the public ALB.
+#   - A fixed-200 rule at /bcgovhealthcheck, probed by that perimeter ALB.
+#   - The AWS Load Balancer Controller itself is granted permissions via EKS
+#     Pod Identity (terraform/main.tf), not IRSA — SCPs on this platform
+#     block creating IAM OIDC providers.
+#
+# Requires the AWS Load Balancer Controller to be installed first (see
+# docs/deploy-aws.md) and the `oneuptime` release's nginx Service to be
+# ClusterIP (see values.yaml's `nginx.service` block).
+#
+# Apply with: kubectl apply -f ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-oneuptime-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: <<GET CERT ARN FROM .ENV>>
+    alb.ingress.kubernetes.io/subnets: <<GET SUBNESTS FROM .env>>
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    # Required by LZA's perimeter automation, plus the same expense-tracking
+    # tags as everything else (keep in sync with terraform/variables.tf's
+    # `tags`).
+    alb.ingress.kubernetes.io/tags: "PublicHost=oneuptime,Public=True,Project=oneuptime,CostTracking=oneuptime"
+    alb.ingress.kubernetes.io/manage-backend-security-group-rules: "true"
+    alb.ingress.kubernetes.io/actions.healthz: |
+      {"Type":"fixed-response","FixedResponseConfig":{"StatusCode":"200","ContentType":"text/plain","MessageBody":"ok"}}
+spec:
+  rules:
+    - http:
+        paths:
+          # Perimeter health probe (served directly by the ALB, fixed 200).
+          - path: /bcgovhealthcheck
+            pathType: Exact
+            backend:
+              service:
+                name: healthz
+                port:
+                  name: use-annotation
+          # App traffic -> the OneUptime nginx Service.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-oneuptime-nginx
+                port:
+                  number: 80
