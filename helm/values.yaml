@@ -2,8 +2,10 @@
 #
 # This targets a single-node-friendly, "get it running" install: built-in
 # standalone PostgreSQL, Redis and ClickHouse (no HA operators), single
-# replicas, plain HTTP over an internal ALB hostname (no custom domain / TLS
-# yet).
+# replicas. TLS is terminated at the ALB using the platform's ACM cert (LZA
+# requires HTTPS-only public endpoints — see helm/ingress.yaml); nginx/the
+# app itself only speak plain HTTP behind it (no custom domain / app-managed
+# TLS yet).
 #
 # See ../docs/deploy-aws.md for the two-step install (the `host` below has to
 # be updated to the real ALB hostname after the first install).
@@ -32,9 +34,19 @@ global:
 # `host` to that public hostname, then `helm upgrade` (see docs/deploy-aws.md).
 host: "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
 
-# No TLS certificate yet — served over plain HTTP via the ALB hostname.
-httpProtocol: http
+# The ALB terminates TLS (LZA requires public endpoints to be HTTPS-only —
+# see helm/ingress.yaml's certificate-arn annotation), so the browser always
+# reaches this over https:// even though nginx/the app itself only speak
+# plain HTTP behind the ALB. `httpProtocol` must reflect what the *browser*
+# uses, not the backend transport — OneUptime bakes this into client-side
+# JS as the base URL for its own API calls. Setting this to `http` while
+# actually being served over https:// causes the browser to block those
+# API calls as mixed content, surfacing as a generic "Network Error" with no
+# server-side trace at all.
+httpProtocol: https
 ssl:
+  # We're not asking the chart to provision/manage a cert — the ALB already
+  # terminates TLS using the platform's ACM cert (see helm/ingress.yaml).
   provision: false
 
 # Long random strings — generate with `openssl rand -hex 32` and paste in,
