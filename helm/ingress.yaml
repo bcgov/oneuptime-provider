@@ -22,7 +22,8 @@ metadata:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internal
     alb.ingress.kubernetes.io/target-type: ip
-
+    alb.ingress.kubernetes.io/certificate-arn: <<GET CERT ARN FROM .ENV>>
+    alb.ingress.kubernetes.io/subnets: <<GET SUBNESTS FROM .env>>
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     # Required by LZA's perimeter automation, plus the same expense-tracking
     # tags as everything else (keep in sync with terraform/variables.tf's
