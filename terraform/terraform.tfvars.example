@@ -18,6 +18,11 @@ node_group_min_size     = 2
 node_group_max_size     = 4
 node_group_desired_size = 2
 
+# Public hostname OneUptime is browsed at — must match helm/values.yaml's
+# `host`. Used by coredns.tf to rewrite in-cluster DNS lookups for this
+# hostname to the OneUptime nginx Service (see that file for why).
+oneuptime_public_host = "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
+
 tags = {
   Project      = "oneuptime"
   Environment  = "dev"

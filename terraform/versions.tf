@@ -24,3 +24,18 @@ provider "aws" {
     tags = var.tags
   }
 }
+
+# Used by coredns.tf to patch the CoreDNS ConfigMap (see that file for why).
+# Authenticates against the cluster this same apply just created/updated,
+# via a short-lived exec-based token (avoids storing/refreshing a static
+# token in state).
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.aws_region]
+  }
+}

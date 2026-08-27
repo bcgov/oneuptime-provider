@@ -70,6 +70,12 @@ variable "node_group_desired_size" {
   default     = 2
 }
 
+variable "oneuptime_public_host" {
+  type        = string
+  description = "Public hostname OneUptime is browsed at (LZA's perimeter hostname, e.g. oneuptime.<account>.stratus.cloud.gov.bc.ca — must match helm/values.yaml's `host`). Because this platform's VPC has no Internet Gateway, pods can't route out to that public hostname when the app makes self-referential API calls (SSR self-fetches for status page/project data) — see coredns.tf, which rewrites in-cluster DNS lookups for this hostname straight to the OneUptime nginx Service so those calls never need to leave the VPC."
+  default     = "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
+}
+
 variable "tags" {
   description = "Common tags applied to every AWS resource this repo creates or uses (via provider default_tags, the gp3 StorageClass's EBS tagSpecification, and the nginx Service's LoadBalancer annotation), so all of OneUptime's AWS spend rolls up under one consistent set of tags for cost allocation/expense tracking."
   type        = map(string)
