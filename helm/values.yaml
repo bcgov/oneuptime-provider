@@ -129,7 +129,7 @@ clickhouse:
 
 # --- Scaling ------------------------------------------------------------
 # Single replica everywhere by default — bump these once you outgrow a
-# dev/small deployment (see production-checklist.md upstream).
+# dev/small deployment (see production-checklist.md upstream https://github.com/OneUptime/oneuptime/blob/master/HelmChart/Public/oneuptime/docs/production-checklist.md).
 deployment:
   replicaCount: 1
 
