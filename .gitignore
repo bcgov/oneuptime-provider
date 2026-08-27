@@ -155,4 +155,4 @@ node_modules/
 tmp/*
 **/*.tfstate*
 **/*.tfstate
-instructions*
+instructions/*

@@ -16,10 +16,21 @@ global:
   storageClass: "gp3"
 
 # Placeholder for the very first install — helm needs *some* value here.
-# After the first `helm install`, run:
-#   kubectl get ingress <release-name>-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-# and set `host` to that hostname, then `helm upgrade` (see docs/deploy-aws.md).
-host: "internal-k8s-default-myoneupt-25100a5ad3-1464245318.ca-central-1.elb.amazonaws.com"
+#
+# IMPORTANT: this must be the hostname you actually browse to, not the raw
+# internal ALB DNS name. On this platform that's LZA's public perimeter
+# hostname, derived from the ALB's `PublicHost` tag (see
+# ../instructions-2.md):
+#   <PublicHost-label>.<your-account>.stratus.cloud.gov.bc.ca
+# e.g. oneuptime.b46814-dev.stratus.cloud.gov.bc.ca
+#
+# OneUptime resolves the app/status-page based on the browser's Host header,
+# so if `host` here doesn't match exactly, requests fall through to
+# status-page domain lookup and fail with "Status Page ID not found". After
+# setting `alb.ingress.kubernetes.io/tags` (PublicHost=...) in
+# helm/ingress.yaml and confirming the public DNS mapping resolves, set
+# `host` to that public hostname, then `helm upgrade` (see docs/deploy-aws.md).
+host: "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
 
 # No TLS certificate yet — served over plain HTTP via the ALB hostname.
 httpProtocol: http
