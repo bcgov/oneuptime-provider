@@ -1,44 +1,48 @@
 # oneuptime-pathfinder
 
 Installation repo for deploying [OneUptime](https://oneuptime.com) to AWS
-using its official [Helm chart](https://artifacthub.io/packages/helm/oneuptime/oneuptime),
-on a newly-provisioned Amazon EKS cluster.
+on **Amazon ECS/Fargate** — no Kubernetes, all Terraform.
 
 ## What's in here
 
-| Path                        | What it does |
-|------------------------------|--------------|
-| `terraform/`                 | Terraform to create the VPC + EKS cluster (with the EBS CSI driver add-on) that OneUptime runs on. |
-| `helm/values.yaml`           | Helm values file configuring OneUptime for a small/dev-sized deployment (built-in standalone Postgres/Redis/ClickHouse, single replicas, plain HTTP). |
-| `helm/gp3-storageclass.yaml` | gp3 `StorageClass` manifest, set as the cluster default for database PVCs. |
-| `docs/deploy-aws.md`         | Step-by-step instructions: provision the cluster, install the chart, and go to production. |
+| Path                                | What it does |
+|--------------------------------------|--------------|
+| `terraform/`                         | Terraform for the full ECS/Fargate stack: cluster, internal ALB, Aurora PostgreSQL, ElastiCache Redis, self-hosted ClickHouse (Fargate + EFS), and the OneUptime ECS services (`nginx`, `app`, `home`, `worker`, `probe`, `runner`). |
+| `docs/deploy-aws.md`                 | Step-by-step deployment runbook — **you run every command yourself**. |
+| `docs/deploy-aws-fargate-plan.md`    | Design plan/rationale for the ECS architecture (superseded once fully implemented — kept for context). |
+| `docs/aws-resources.md`              | Inventory of every AWS resource this repo creates, plus a cost estimate. |
 
 ## Quick start
 
-See [`docs/deploy-aws.md`](docs/deploy-aws.md) for full instructions. In short:
+See [`docs/deploy-aws.md`](docs/deploy-aws.md) for full instructions,
+prerequisites, and known limitations. In short:
 
 ```console
-cd terraform && terraform init && terraform apply
-aws eks update-kubeconfig --region <region> --name <cluster-name>
-kubectl apply -f ../helm/gp3-storageclass.yaml
-
-helm repo add oneuptime https://helm-chart.oneuptime.com/
-helm install my-oneuptime oneuptime/oneuptime -f ../helm/values.yaml --timeout 15m
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# edit terraform.tfvars: acm_certificate_arn, oneuptime_public_host, ...
+terraform init
+terraform apply
 ```
 
 ## Assumptions made
 
 This repo was generated based on the following choices (see
-`docs/deploy-aws.md` "Next steps" for how to change them later):
+`docs/deploy-aws-fargate-plan.md` for the full rationale):
 
-- A **new** EKS cluster is provisioned via Terraform (rather than reusing an
-  existing cluster).
-- A **small/dev-sized** deployment: built-in standalone PostgreSQL, Redis and
-  ClickHouse, single replicas — not the HA operator-backed production setup.
-- **No custom domain yet** — OneUptime is served over plain HTTP via an
-  internal ALB's hostname. Add a domain + TLS once you have one (see
-  `docs/deploy-aws.md`).
-- **Tagged for expense tracking** — every AWS resource created or used by
-  OneUptime (VPC/EKS via Terraform, EBS volumes, and the ALB) is
-  tagged `Project=oneuptime` / `CostTracking=oneuptime`, so its spend rolls up
-  cleanly in Cost Explorer (see `docs/deploy-aws.md` "Tagging").
+- **ECS on Fargate**, not EKS — no EC2 nodes to patch/manage.
+- A **simplified/dev-sized** deployment: the minimum OneUptime service set
+  (`nginx`, `app`, `home`, `worker`, `probe`, `runner`), single task per
+  service, no autoscaling yet.
+- **Managed data stores**: Amazon Aurora PostgreSQL (Serverless v2) and
+  Amazon ElastiCache for Redis, since Fargate has no persistent block
+  storage for self-hosted databases. **ClickHouse** has no AWS-managed
+  equivalent, so it's self-hosted on its own Fargate task backed by EFS
+  (single instance, no HA — see `docs/deploy-aws.md`'s "Known limitations").
+- **LZA Pattern B**: a Terraform-managed internal ALB tagged
+  `Public=True`/`PublicHost=<label>` for the platform's perimeter
+  automation — same public-exposure model as before, just without the
+  Kubernetes AWS Load Balancer Controller in between.
+- **Tagged for expense tracking** — every AWS resource this repo creates is
+  tagged `Project=oneuptime` / `CostTracking=oneuptime` (see
+  `docs/aws-resources.md`).

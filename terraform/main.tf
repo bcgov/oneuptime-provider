@@ -1,156 +1,277 @@
 ###############################################################################
-# Networking
-###############################################################################
-# The VPC and subnets are platform-managed and cannot be created, modified,
-# or tagged by users — no `aws_vpc`/`aws_subnet` *resources* here. The
-# cluster is deployed into the existing VPC/subnets, looked up by Name tag
-# in data.tf (var.vpc_name / var.subnet_a / var.subnet_b). Because we can't
-# tag these subnets for kubernetes.io/role/elb auto-discovery, the Network
-# Load Balancer's subnets are instead specified explicitly via a Service
-# annotation in helm/values.yaml (service.beta.kubernetes.io/aws-load-balancer-subnets).
-
-###############################################################################
-# EKS cluster
+# Shared ECS platform: cluster, service discovery
 ###############################################################################
 
-module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.0"
+module "service_discovery" {
+  source = "./modules/service-discovery"
 
-  cluster_name    = var.cluster_name
-  cluster_version = var.cluster_version
+  name      = var.name
+  namespace = "${var.name}.local"
+  vpc_id    = data.aws_vpc.selected.id
+  tags      = var.tags
+}
 
-  vpc_id                   = data.aws_vpc.selected.id
-  subnet_ids               = [data.aws_subnet.a.id, data.aws_subnet.b.id]
-  control_plane_subnet_ids = [data.aws_subnet.a.id, data.aws_subnet.b.id]
+module "ecs_cluster" {
+  source = "./modules/ecs-cluster"
 
-  cluster_endpoint_public_access = true
+  name = var.name
+  tags = var.tags
+}
 
-  # No OIDC-based IRSA — creating an OIDC identity provider
-  # (iam:CreateOpenIDConnectProvider) is an account-wide IAM action typically
-  # blocked on this platform. EKS Pod Identity (below) is used instead to
-  # grant the EBS CSI driver its IAM role, which only needs
-  # iam:CreateRole/AttachRolePolicy plus eks:CreatePodIdentityAssociation.
-  enable_irsa = false
+###############################################################################
+# Networking: one shared security group for every ECS task (nginx included)
+###############################################################################
+# All OneUptime services talk to each other over Service Connect (east-west),
+# so they share one security group with a self-referencing ingress rule
+# (mirrors how pods in the same EKS cluster could reach each other by
+# default). The ALB is only allowed to reach nginx's container port — see the
+# aws_security_group_rule below, added after the alb module exists (kept
+# out of the alb module itself to avoid a security-group creation cycle
+# between the two modules).
+resource "aws_security_group" "ecs_tasks" {
+  name        = "${var.name}-ecs-tasks"
+  description = "Shared security group for all OneUptime ECS Fargate tasks."
+  vpc_id      = data.aws_vpc.selected.id
 
-  # Managed add-ons. The EBS CSI driver is required so PostgreSQL, Redis and
-  # ClickHouse (all built on PVCs) can provision EBS-backed volumes. The
-  # eks-pod-identity-agent add-on is required for the Pod Identity
-  # association (below) to actually inject credentials into the CSI driver's
-  # pods.
-  cluster_addons = {
-    coredns = {
-      most_recent = true
-    }
-    kube-proxy = {
-      most_recent = true
-    }
-    vpc-cni = {
-      most_recent = true
-    }
-    eks-pod-identity-agent = {
-      most_recent = true
-    }
-    aws-ebs-csi-driver = {
-      most_recent = true
-    }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  eks_managed_node_groups = {
-    default = {
-      # EKS 1.30+ no longer supports the AL2 AMI family for managed node
-      # groups (default before this module version); AL2023 is required.
-      ami_type = "AL2023_x86_64_STANDARD"
+  tags = var.tags
+}
 
-      min_size       = var.node_group_min_size
-      max_size       = var.node_group_max_size
-      desired_size   = var.node_group_desired_size
-      instance_types = var.node_instance_types
-      capacity_type  = "ON_DEMAND"
+resource "aws_security_group_rule" "ecs_tasks_self_ingress" {
+  type              = "ingress"
+  security_group_id = aws_security_group.ecs_tasks.id
+  from_port         = 0
+  to_port           = 65535
+  protocol          = "tcp"
+  self              = true
+  description       = "Service Connect east-west traffic between OneUptime services."
+}
 
-      labels = {
-        role = "oneuptime"
-      }
-    }
+resource "aws_security_group_rule" "ecs_tasks_from_alb" {
+  type                     = "ingress"
+  security_group_id        = aws_security_group.ecs_tasks.id
+  from_port                = var.service_sizing["nginx"].container_port
+  to_port                  = var.service_sizing["nginx"].container_port
+  protocol                 = "tcp"
+  source_security_group_id = module.alb.alb_security_group_id
+  description              = "ALB to nginx"
+}
+
+###############################################################################
+# Public exposure: internal ALB (LZA Pattern B) + Route 53 self-reference fix
+###############################################################################
+
+module "alb" {
+  source = "./modules/alb"
+
+  name                    = var.name
+  vpc_id                  = data.aws_vpc.selected.id
+  vpc_cidr                = data.aws_vpc.selected.cidr_block
+  subnet_ids              = [data.aws_subnet.a.id, data.aws_subnet.b.id]
+  acm_certificate_arn     = var.acm_certificate_arn
+  public_host_label       = var.public_host_label
+  nginx_container_port    = var.service_sizing["nginx"].container_port
+  nginx_security_group_id = aws_security_group.ecs_tasks.id
+  tags                    = var.tags
+}
+
+module "dns" {
+  source = "./modules/dns"
+
+  public_hostname = var.oneuptime_public_host
+  vpc_id          = data.aws_vpc.selected.id
+  alb_dns_name    = module.alb.alb_dns_name
+  alb_zone_id     = module.alb.alb_zone_id
+  tags            = var.tags
+}
+
+###############################################################################
+# Secrets
+###############################################################################
+
+resource "random_password" "oneuptime_secret" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "encryption_secret" {
+  length  = 64
+  special = false
+}
+
+resource "random_password" "db_password" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "redis_auth_token" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "clickhouse_password" {
+  length  = 32
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "this" {
+  name = "${var.name}-secrets"
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "this" {
+  secret_id = aws_secretsmanager_secret.this.id
+  secret_string = jsonencode({
+    ONEUPTIME_SECRET    = random_password.oneuptime_secret.result
+    ENCRYPTION_SECRET   = random_password.encryption_secret.result
+    DATABASE_PASSWORD   = random_password.db_password.result
+    REDIS_AUTH_TOKEN    = random_password.redis_auth_token.result
+    CLICKHOUSE_PASSWORD = random_password.clickhouse_password.result
+  })
+}
+
+###############################################################################
+# IAM
+###############################################################################
+
+module "iam" {
+  source = "./modules/iam"
+
+  name          = var.name
+  secret_arn    = aws_secretsmanager_secret.this.arn
+  service_names = setunion(toset(keys(var.service_sizing)), ["clickhouse"])
+  tags          = var.tags
+}
+
+###############################################################################
+# Data stores
+###############################################################################
+
+module "rds" {
+  source = "./modules/rds"
+
+  name                       = "${var.name}-db"
+  vpc_id                     = data.aws_vpc.selected.id
+  subnet_ids                 = [data.aws_subnet.a.id, data.aws_subnet.b.id]
+  allowed_security_group_ids = [aws_security_group.ecs_tasks.id]
+  db_password                = random_password.db_password.result
+  min_capacity               = var.rds_min_capacity
+  max_capacity               = var.rds_max_capacity
+  tags                       = var.tags
+}
+
+module "elasticache" {
+  source = "./modules/elasticache"
+
+  name                       = "${var.name}-redis"
+  vpc_id                     = data.aws_vpc.selected.id
+  subnet_ids                 = [data.aws_subnet.a.id, data.aws_subnet.b.id]
+  allowed_security_group_ids = [aws_security_group.ecs_tasks.id]
+  node_type                  = var.redis_node_type
+  auth_token                 = random_password.redis_auth_token.result
+  tags                       = var.tags
+}
+
+module "clickhouse" {
+  source = "./modules/clickhouse"
+
+  name                       = var.name
+  aws_region                 = var.aws_region
+  cluster_arn                = module.ecs_cluster.cluster_arn
+  cluster_name               = module.ecs_cluster.cluster_name
+  namespace_arn              = module.service_discovery.namespace_id
+  vpc_id                     = data.aws_vpc.selected.id
+  subnet_ids                 = [data.aws_subnet.a.id, data.aws_subnet.b.id]
+  allowed_security_group_ids = [aws_security_group.ecs_tasks.id]
+  task_execution_role_arn    = module.iam.task_execution_role_arn
+  task_role_arn              = module.iam.task_role_arns["clickhouse"]
+  log_group_name             = module.ecs_cluster.log_group_name
+  image_tag                  = var.clickhouse_image_tag
+  password_secret_arn        = "${aws_secretsmanager_secret.this.arn}:CLICKHOUSE_PASSWORD::"
+  tags                       = var.tags
+}
+
+###############################################################################
+# OneUptime services
+###############################################################################
+# Image per service — `worker` intentionally runs the "app" image (same
+# process, different role: it registers the BullMQ queue consumers instead of
+# serving API traffic — see the upstream chart's worker.yaml). Reconcile the
+# environment map below against the OneUptime Helm chart's values.yaml/
+# ConfigMap for your target version before going to production — this covers
+# the common/required variables only (see docs/deploy-aws.md's "Known
+# limitations").
+locals {
+  image_repo = {
+    nginx  = "nginx"
+    app    = "app"
+    home   = "home"
+    worker = "app"
+    probe  = "probe"
+    runner = "runner"
   }
 
-  # Grant the identity running terraform cluster-admin so it can immediately
-  # helm install after apply.
-  enable_cluster_creator_admin_permissions = true
+  common_environment = [
+    { name = "NODE_ENV", value = "production" },
+    { name = "LOG_LEVEL", value = "ERROR" },
+    { name = "HOST", value = var.oneuptime_public_host },
+    { name = "HTTP_PROTOCOL", value = "https" },
+    { name = "DATABASE_HOST", value = module.rds.endpoint },
+    { name = "DATABASE_PORT", value = tostring(module.rds.port) },
+    { name = "DATABASE_NAME", value = module.rds.database_name },
+    { name = "DATABASE_USERNAME", value = "postgres" },
+    { name = "REDIS_HOST", value = module.elasticache.primary_endpoint_address },
+    { name = "REDIS_PORT", value = tostring(module.elasticache.port) },
+    { name = "CLICKHOUSE_HOST", value = module.clickhouse.native_dns_name },
+    { name = "CLICKHOUSE_PORT", value = "9000" },
+    { name = "CLICKHOUSE_DATABASE", value = "oneuptime" },
+    { name = "CLICKHOUSE_USER", value = "oneuptime" },
+  ]
+
+  common_secrets = [
+    { name = "ONEUPTIME_SECRET", valueFrom = "${aws_secretsmanager_secret.this.arn}:ONEUPTIME_SECRET::" },
+    { name = "ENCRYPTION_SECRET", valueFrom = "${aws_secretsmanager_secret.this.arn}:ENCRYPTION_SECRET::" },
+    { name = "DATABASE_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:DATABASE_PASSWORD::" },
+    { name = "REDIS_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:REDIS_AUTH_TOKEN::" },
+    { name = "CLICKHOUSE_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:CLICKHOUSE_PASSWORD::" },
+  ]
+}
+
+module "services" {
+  source   = "./modules/ecs-service"
+  for_each = var.service_sizing
+
+  name          = each.key
+  aws_region    = var.aws_region
+  cluster_arn   = module.ecs_cluster.cluster_arn
+  cluster_name  = module.ecs_cluster.cluster_name
+  namespace_arn = module.service_discovery.namespace_id
+
+  image  = "docker.io/oneuptime/${local.image_repo[each.key]}:${var.image_tag}"
+  cpu    = each.value.cpu
+  memory = each.value.memory
+
+  container_port = each.value.container_port
+  desired_count  = each.value.desired_count
+
+  environment = local.common_environment
+  secrets     = local.common_secrets
+
+  task_execution_role_arn = module.iam.task_execution_role_arn
+  task_role_arn           = module.iam.task_role_arns[each.key]
+
+  subnet_ids         = [data.aws_subnet.a.id, data.aws_subnet.b.id]
+  security_group_ids = [aws_security_group.ecs_tasks.id]
+  target_group_arn   = each.key == "nginx" ? module.alb.nginx_target_group_arn : null
+  log_group_name     = module.ecs_cluster.log_group_name
 
   tags = var.tags
-}
 
-###############################################################################
-# EKS Pod Identity role for the EBS CSI driver add-on
-###############################################################################
-# Plain IAM role trusted by the Pod Identity service (no OIDC provider
-# needed) + an association binding it to the CSI driver's ServiceAccount.
-
-data "aws_iam_policy_document" "ebs_csi_pod_identity_assume_role" {
-  statement {
-    actions = ["sts:AssumeRole", "sts:TagSession"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["pods.eks.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "ebs_csi_driver" {
-  name               = "${var.cluster_name}-ebs-csi-driver"
-  assume_role_policy = data.aws_iam_policy_document.ebs_csi_pod_identity_assume_role.json
-
-  tags = var.tags
-}
-
-resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
-  role       = aws_iam_role.ebs_csi_driver.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-}
-
-resource "aws_eks_pod_identity_association" "ebs_csi_driver" {
-  cluster_name    = module.eks.cluster_name
-  namespace       = "kube-system"
-  service_account = "ebs-csi-controller-sa"
-  role_arn        = aws_iam_role.ebs_csi_driver.arn
-}
-
-###############################################################################
-# EKS Pod Identity role for the AWS Load Balancer Controller
-###############################################################################
-# LZA (this platform's AWS Landing Zone Accelerator) requires internet-bound
-# traffic to reach EKS through an *internal* ALB fronted by the perimeter's
-# public ALB — see instructions.md, Pattern A. The AWS Load Balancer
-# Controller (installed via Helm — see docs/deploy-aws.md) owns/creates that
-# internal ALB via a Kubernetes Ingress. Like the EBS CSI driver, its IAM
-# permissions are granted via EKS Pod Identity rather than IRSA, since SCPs
-# on this platform block creating IAM OIDC providers.
-
-resource "aws_iam_policy" "aws_load_balancer_controller" {
-  name        = "${var.cluster_name}-aws-load-balancer-controller"
-  description = "Permissions for the AWS Load Balancer Controller to manage ALBs/NLBs (upstream policy from kubernetes-sigs/aws-load-balancer-controller)."
-  policy      = file("${path.module}/policies/aws-load-balancer-controller-iam-policy.json")
-
-  tags = var.tags
-}
-
-resource "aws_iam_role" "aws_load_balancer_controller" {
-  name               = "${var.cluster_name}-aws-load-balancer-controller"
-  assume_role_policy = data.aws_iam_policy_document.ebs_csi_pod_identity_assume_role.json
-
-  tags = var.tags
-}
-
-resource "aws_iam_role_policy_attachment" "aws_load_balancer_controller" {
-  role       = aws_iam_role.aws_load_balancer_controller.name
-  policy_arn = aws_iam_policy.aws_load_balancer_controller.arn
-}
-
-resource "aws_eks_pod_identity_association" "aws_load_balancer_controller" {
-  cluster_name    = module.eks.cluster_name
-  namespace       = "kube-system"
-  service_account = "aws-load-balancer-controller"
-  role_arn        = aws_iam_role.aws_load_balancer_controller.arn
+  depends_on = [module.rds, module.elasticache, module.clickhouse]
 }

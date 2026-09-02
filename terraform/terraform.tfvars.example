@@ -1,27 +1,35 @@
 # Copy this file to terraform.tfvars and adjust as needed.
+# You (the requester) run every `terraform apply`/`aws` command yourself —
+# this repo only provides the Terraform code and the runbook in
+# docs/deploy-aws.md.
 
 # Platform constraint: only ca-central-1 is supported.
-aws_region      = "ca-central-1"
-cluster_name    = "oneuptime"
-cluster_version = "1.30"
+aws_region = "ca-central-1"
+name       = "oneuptime"
 
 # Platform-managed VPC/subnets, looked up by Name tag (see terraform/data.tf)
 # — set these to match your environment. You cannot create or modify
-# VPCs/subnets yourself. Only one subnet tier exists on this platform and is
-# used for both the EKS cluster and the load balancer.
+# VPCs/subnets yourself. Only one subnet tier exists on this platform.
 vpc_name = "Dev"
 subnet_a = "Dev-App-A"
 subnet_b = "Dev-App-B"
 
-node_instance_types     = ["m6i.xlarge"]
-node_group_min_size     = 2
-node_group_max_size     = 4
-node_group_desired_size = 2
+# ARN of a pre-existing ACM certificate (obtained from your platform team) —
+# not provisioned by this repo.
+acm_certificate_arn = "arn:aws:acm:ca-central-1:123456789012:certificate/CHANGE-ME"
 
-# Public hostname OneUptime is browsed at — must match helm/values.yaml's
-# `host`. Used by coredns.tf to rewrite in-cluster DNS lookups for this
-# hostname to the OneUptime nginx Service (see that file for why).
+# Public hostname OneUptime is browsed at, and the label used for the ALB's
+# PublicHost tag (must be the hostname's first label, no dots).
 oneuptime_public_host = "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
+public_host_label     = "oneuptime"
+
+# Pin a released OneUptime image tag before production use:
+# https://github.com/OneUptime/oneuptime/releases
+image_tag = "release"
+
+rds_min_capacity = 0.5
+rds_max_capacity = 2
+redis_node_type   = "cache.t4g.micro"
 
 tags = {
   Project      = "oneuptime"

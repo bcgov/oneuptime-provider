@@ -6,9 +6,8 @@ data "aws_vpc" "selected" {
 }
 
 # Only one pair of subnets exists on this platform (the "App" tier) and it is
-# used both for the EKS control plane/nodes and for the Network Load Balancer
-# exposing OneUptime (see helm/values.yaml's aws-load-balancer-subnets
-# annotation).
+# used for everything: ECS Fargate task ENIs, the internal ALB, RDS/
+# ElastiCache/EFS mount targets.
 data "aws_subnet" "a" {
   vpc_id = data.aws_vpc.selected.id
 
