@@ -151,6 +151,38 @@ resource "aws_ecs_task_definition" "this" {
   ])
 }
 
+# Classic Cloud Map service discovery registration, IN ADDITION to Service
+# Connect below. Service Connect's DNS names (e.g. "clickhouse") only
+# resolve for tasks that are themselves Service Connect *clients* — i.e.
+# members of an aws_ecs_service with its own service_connect_configuration.
+# Standalone one-off tasks started via `aws ecs run-task` (e.g. this repo's
+# `migrate` task definition, which needs to reach ClickHouse to run its
+# telemetry-table migrations) are NOT Service Connect clients and get
+# `getaddrinfo ENOTFOUND clickhouse` trying to resolve that name. Classic
+# Cloud Map service discovery creates a real Route 53 private-hosted-zone A
+# record that any task in the VPC can resolve via normal DNS, regardless of
+# Service Connect membership — used as CLICKHOUSE_HOST for the migrate task
+# only (see per_service_environment in the root main.tf); other services
+# keep using the Service Connect "clickhouse" alias as before.
+resource "aws_service_discovery_service" "native" {
+  name = "clickhouse-direct"
+
+  dns_config {
+    namespace_id = var.namespace_id
+
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+
+    routing_policy = "MULTIVALUE"
+  }
+
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
+
 resource "aws_ecs_service" "this" {
   name            = "clickhouse"
   cluster         = var.cluster_arn
@@ -166,6 +198,10 @@ resource "aws_ecs_service" "this" {
     subnets          = var.subnet_ids
     security_groups  = [aws_security_group.this.id]
     assign_public_ip = false
+  }
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.native.arn
   }
 
   service_connect_configuration {

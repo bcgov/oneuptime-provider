@@ -29,3 +29,13 @@ output "rds_endpoint" {
 output "redis_endpoint" {
   value = module.elasticache.primary_endpoint_address
 }
+
+output "migrate_task_definition_arn" {
+  description = "One-off DB migration task definition — run once via `aws ecs run-task` (see comment above aws_ecs_task_definition.migrate in main.tf) before relying on app/worker being healthy."
+  value       = aws_ecs_task_definition.migrate.arn
+}
+
+output "ecs_task_security_group_id" {
+  description = "Security group to pass as --network-configuration's securityGroups when running the migrate task manually."
+  value       = aws_security_group.ecs_tasks.id
+}

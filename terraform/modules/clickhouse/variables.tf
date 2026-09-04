@@ -18,6 +18,14 @@ variable "namespace_arn" {
   type = string
 }
 
+variable "namespace_id" {
+  type = string
+}
+
+variable "namespace_name" {
+  type = string
+}
+
 variable "vpc_id" {
   type = string
 }

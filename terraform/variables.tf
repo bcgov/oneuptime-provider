@@ -78,9 +78,9 @@ variable "service_sizing" {
   default = {
     nginx  = { cpu = 512, memory = 1024, desired_count = 1, container_port = 8080 }
     app    = { cpu = 1024, memory = 2048, desired_count = 1, container_port = 3002 }
-    home   = { cpu = 256, memory = 512, desired_count = 1, container_port = 3003 }
+    home   = { cpu = 512, memory = 1024, desired_count = 1, container_port = 3003 }
     worker = { cpu = 1024, memory = 2048, desired_count = 1, container_port = 3002 }
-    probe  = { cpu = 256, memory = 512, desired_count = 1, container_port = 3005 }
+    probe  = { cpu = 512, memory = 1024, desired_count = 1, container_port = 3005 }
     runner = { cpu = 256, memory = 512, desired_count = 1, container_port = 3006 }
   }
 }
