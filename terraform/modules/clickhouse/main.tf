@@ -119,7 +119,7 @@ resource "aws_ecs_task_definition" "this" {
   container_definitions = jsonencode([
     {
       name      = "clickhouse"
-      image     = "clickhouse/clickhouse-server:${var.image_tag}"
+      image     = "ghcr.io/jlangy/oneuptime-clickhouse:26.7" #"clickhouse/clickhouse-server:${var.image_tag}"
       essential = true
       portMappings = [
         { name = "clickhouse-native", protocol = "tcp", containerPort = 9000, hostPort = 9000 },

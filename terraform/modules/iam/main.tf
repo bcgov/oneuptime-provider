@@ -36,7 +36,7 @@ resource "aws_iam_role_policy" "task_execution_read_secret" {
       {
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
-        Resource = [var.secret_arn]
+        Resource = var.secret_arns
       }
     ]
   })

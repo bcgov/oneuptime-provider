@@ -2,9 +2,9 @@ variable "name" {
   type = string
 }
 
-variable "secret_arn" {
-  description = "ARN of the Secrets Manager secret every task execution role needs read access to, to resolve `secrets` blocks in its task definition."
-  type        = string
+variable "secret_arns" {
+  description = "ARNs of the Secrets Manager secrets every task execution role needs read access to, to resolve `secrets` blocks in its task definitions."
+  type        = list(string)
 }
 
 variable "service_names" {

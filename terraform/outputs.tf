@@ -39,3 +39,8 @@ output "ecs_task_security_group_id" {
   description = "Security group to pass as --network-configuration's securityGroups when running the migrate task manually."
   value       = aws_security_group.ecs_tasks.id
 }
+
+output "alb_access_logs_bucket" {
+  description = "S3 bucket receiving ALB access logs, or null when var.enable_alb_access_logs is false (the default). Enable to debug whether requests actually reach nginx (e.g. diagnosing 504s) — every line shows the target's response code and processing time, or a timeout/-1 reason code if the ALB gave up waiting on nginx."
+  value       = module.alb.alb_access_logs_bucket
+}

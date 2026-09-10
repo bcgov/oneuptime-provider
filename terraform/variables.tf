@@ -15,6 +15,12 @@ variable "name" {
   default     = "oneuptime"
 }
 
+variable "certificate" {
+  description = "AWS cert"
+  type = string
+  default = ""  
+}
+
 # --- Platform-managed networking --------------------------------------------
 # VPCs and subnets are provisioned and owned by the platform team and cannot
 # be created or modified by users (no `aws_vpc`/`aws_subnet` resources, and no
@@ -58,6 +64,12 @@ variable "public_host_label" {
   default     = "oneuptime"
 }
 
+variable "enable_alb_access_logs" {
+  description = "Enable ALB access logging to a Terraform-managed S3 bucket. Off by default; turn on temporarily to debug request-flow issues (e.g. 504s) — the access log shows every request the ALB actually forwarded to nginx and its response code/latency, even when nginx/app themselves log nothing for it."
+  type        = bool
+  default     = false
+}
+
 # --- ECS sizing (simplified/dev scope — bump before production) -------------
 
 variable "service_sizing" {
@@ -76,7 +88,11 @@ variable "service_sizing" {
     container_port = optional(number)
   }))
   default = {
-    nginx  = { cpu = 512, memory = 1024, desired_count = 1, container_port = 8080 }
+    # nginx's default.conf.template listens on 7849 (not the commonly assumed
+    # 8080) — confirmed against the actual running container; the ALB target
+    # group/health check derive this same value via nginx_container_port in
+    # main.tf, so this single change fixes both.
+    nginx  = { cpu = 512, memory = 1024, desired_count = 1, container_port = 7849 }
     app    = { cpu = 1024, memory = 2048, desired_count = 1, container_port = 3002 }
     home   = { cpu = 512, memory = 1024, desired_count = 1, container_port = 3003 }
     worker = { cpu = 1024, memory = 2048, desired_count = 1, container_port = 3002 }

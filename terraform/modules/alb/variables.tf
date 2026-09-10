@@ -34,3 +34,14 @@ variable "nginx_security_group_id" {
 variable "tags" {
   type = map(string)
 }
+
+variable "aws_region" {
+  description = "AWS region, needed to look up the regional ELB service account for the access-log bucket policy on partitions that still require it (harmless/no-op on newer regions that only need the service-principal statement)."
+  type        = string
+}
+
+variable "enable_access_logs" {
+  description = "Enable ALB access logging to S3 (bucket created by this module). Turn on for debugging request flow (e.g. diagnosing 504s) - shows every request the ALB actually forwarded to a target, and its response code/latency, even when the target itself logs nothing."
+  type        = bool
+  default     = false
+}

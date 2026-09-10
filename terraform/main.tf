@@ -92,6 +92,8 @@ module "alb" {
   public_host_label       = var.public_host_label
   nginx_container_port    = var.service_sizing["nginx"].container_port
   nginx_security_group_id = aws_security_group.ecs_tasks.id
+  aws_region              = var.aws_region
+  enable_access_logs      = var.enable_alb_access_logs
   tags                    = var.tags
 }
 
@@ -171,6 +173,35 @@ resource "aws_secretsmanager_secret_version" "this" {
   })
 }
 
+# ElastiCache Redis is deployed with transit_encryption_enabled = true
+# (modules/elasticache/main.tf), so every client must speak TLS. OneUptime's
+# Redis client only enables TLS when REDIS_TLS_CA is set (Common/Server/
+# EnvironmentConfig.ts: `ShouldRedisTlsEnable = Boolean(RedisTlsCa || ...)`)
+# and expects that env var's VALUE to be the actual PEM certificate content
+# (with real newlines), not a reference/path. Confirmed in a live deployment
+# that folding this into the common JSON secret above breaks it: Secrets
+# Manager's JSON string escapes newlines as literal "\n" characters, and
+# unlike the other JSON keys (which are single-line passwords), the app reads
+# this value as literal PEM text — the escaped "\n" sequences are not valid
+# PEM line breaks and TLS verification fails.
+#
+# ElastiCache's server certificate chains up to Amazon's own trust store
+# (docs: "Authenticating with Native Redis SSL/TLS"), so the single, public,
+# well-known AmazonRootCA1 (https://www.amazontrust.com/repository/AmazonRootCA1.pem)
+# is sufficient here — it is not a deployment-specific secret, but is kept in
+# Secrets Manager anyway for consistency with how every other cert/credential
+# in this stack is delivered to tasks (a `secrets` block, not a plain
+# environment variable baked into the task definition).
+resource "aws_secretsmanager_secret" "redis_tls_ca" {
+  name = "${var.name}-redis-tls-ca"
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "redis_tls_ca" {
+  secret_id     = aws_secretsmanager_secret.redis_tls_ca.id
+  secret_string = var.certificate
+}
+
 ###############################################################################
 # IAM
 ###############################################################################
@@ -179,7 +210,7 @@ module "iam" {
   source = "./modules/iam"
 
   name          = var.name
-  secret_arn    = aws_secretsmanager_secret.this.arn
+  secret_arns   = [aws_secretsmanager_secret.this.arn, aws_secretsmanager_secret.redis_tls_ca.arn]
   service_names = setunion(toset(keys(var.service_sizing)), ["clickhouse", "migrate"])
   tags          = var.tags
 }
@@ -258,7 +289,12 @@ locals {
 
   common_environment = [
     { name = "NODE_ENV", value = "production" },
-    { name = "LOG_LEVEL", value = "ERROR" },
+    # Bumped from the OneUptime default of "ERROR" while actively debugging
+    # the 504/blank-startup issue - DEBUG is the most verbose value accepted
+    # by Common/Server/Types/ConfigLogLevel.ts (INFO/WARN/ERROR/DEBUG/OFF).
+    # Dial back to "ERROR" or "INFO" once the app is healthy; DEBUG is noisy
+    # and not meant for steady-state production use.
+    { name = "LOG_LEVEL", value = "DEBUG" },
     { name = "HOST", value = var.oneuptime_public_host },
     { name = "HTTP_PROTOCOL", value = "https" },
     { name = "DATABASE_HOST", value = module.rds.endpoint },
@@ -267,8 +303,17 @@ locals {
     { name = "DATABASE_USERNAME", value = "postgres" },
     { name = "REDIS_HOST", value = module.elasticache.primary_endpoint_address },
     { name = "REDIS_PORT", value = tostring(module.elasticache.port) },
-    { name = "CLICKHOUSE_HOST", value = module.clickhouse.native_dns_name },
-    { name = "CLICKHOUSE_PORT", value = "9000" },
+    { name = "CLICKHOUSE_HOST", value = module.clickhouse.http_dns_name },
+    # @clickhouse/client (Common/Server/Infrastructure/ClickhouseDatabase.ts)
+    # is an HTTP-only client library — it builds its base URL as
+    # "http(s)://<CLICKHOUSE_HOST>:<CLICKHOUSE_PORT>" and issues plain HTTP
+    # requests (see ClickhouseConfig.ts: `(ClickhousePort || 8123)`, i.e. its
+    # own fallback is 8123). It never speaks ClickHouse's native binary
+    # protocol, so this MUST be ClickHouse's HTTP interface port (8123), not
+    # the native protocol port (9000) — sending HTTP requests to the native
+    # port gets no valid HTTP response and the client hangs/retries forever
+    # with no clear error surfaced.
+    { name = "CLICKHOUSE_PORT", value = "8123" },
     { name = "CLICKHOUSE_DATABASE", value = "oneuptime" },
     { name = "CLICKHOUSE_USER", value = "oneuptime" },
     # Required by nginx's default.conf.template (Nginx/default.conf.template
@@ -316,6 +361,12 @@ locals {
     { name = "DATABASE_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:DATABASE_PASSWORD::" },
     { name = "REDIS_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:REDIS_AUTH_TOKEN::" },
     { name = "CLICKHOUSE_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:CLICKHOUSE_PASSWORD::" },
+    # ElastiCache Redis requires TLS (transit_encryption_enabled = true) —
+    # this is a dedicated, non-JSON secret (see aws_secretsmanager_secret.redis_tls_ca
+    # above) specifically so its PEM newlines survive intact; referencing it
+    # here with no ":key::" suffix pulls the ENTIRE secret string verbatim,
+    # unlike the ":KEY::" JSON-field references above.
+    { name = "REDIS_TLS_CA", valueFrom = aws_secretsmanager_secret.redis_tls_ca.arn },
   ]
 
   # Per-service env var overrides, merged on top of common_environment.
@@ -340,12 +391,27 @@ locals {
     nginx = [
       { name = "NGINX_LISTEN_ADDRESS", value = "" },
       { name = "NGINX_LISTEN_OPTIONS", value = "" },
+      # Confirmed necessary in a live deployment - without this nginx opens a
+      # fresh upstream connection per request instead of reusing a pooled
+      # keepalive connection to app/home, which was contributing to
+      # timeouts/slow responses under load.
+      { name = "NGINX_UPSTREAM_KEEPALIVE", value = "true" },
     ]
     probe = [
       { name = "ONEUPTIME_URL", value = local.oneuptime_internal_url },
+      { name = "PROBE_NAME", value = "probe mcprobeface" },
     ]
     runner = [
       { name = "ONEUPTIME_URL", value = local.oneuptime_internal_url },
+    ]
+    # "worker" is a separate ECS service running the SAME app image
+    # specifically to consume BullMQ queues (see image_repo above) — without
+    # this, "app" ALSO consumes queues by default (DisableQueueWorkers
+    # defaults to false upstream), duplicating/racing queue consumption
+    # between the two services. Confirmed necessary in a live deployment.
+    app = [
+      { name = "DISABLE_QUEUE_WORKERS", value = "true"},
+      { name = "PORT", value= "3002" },
     ]
   }
 
