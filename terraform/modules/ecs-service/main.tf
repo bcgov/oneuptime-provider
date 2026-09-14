@@ -1,12 +1,3 @@
-# Generic ECS Fargate service module, instantiated once per OneUptime
-# microservice in the root module (nginx, app, home, worker, probe, runner).
-#
-# Uses ECS Service Connect (not raw Cloud Map) for east-west DNS — the ECS
-# equivalent of Kubernetes in-cluster Service DNS. Every service joins the
-# shared Cloud Map namespace as a *client* (so it can resolve other
-# services' short names, e.g. `http://app:3002`); services that take inbound
-# traffic from siblings (set `service_connect_port_name`) additionally
-# register themselves so their short name resolves.
 resource "aws_ecs_task_definition" "this" {
   family                   = "${var.cluster_name}-${var.name}"
   execution_role_arn       = var.task_execution_role_arn

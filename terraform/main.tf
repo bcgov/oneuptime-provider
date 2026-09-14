@@ -199,7 +199,9 @@ resource "aws_secretsmanager_secret" "redis_tls_ca" {
 
 resource "aws_secretsmanager_secret_version" "redis_tls_ca" {
   secret_id     = aws_secretsmanager_secret.redis_tls_ca.id
-  secret_string = var.certificate
+  secret_string = <<-EOT
+
+  EOT
 }
 
 ###############################################################################
@@ -290,10 +292,6 @@ locals {
   common_environment = [
     { name = "NODE_ENV", value = "production" },
     # Bumped from the OneUptime default of "ERROR" while actively debugging
-    # the 504/blank-startup issue - DEBUG is the most verbose value accepted
-    # by Common/Server/Types/ConfigLogLevel.ts (INFO/WARN/ERROR/DEBUG/OFF).
-    # Dial back to "ERROR" or "INFO" once the app is healthy; DEBUG is noisy
-    # and not meant for steady-state production use.
     { name = "LOG_LEVEL", value = "DEBUG" },
     { name = "HOST", value = var.oneuptime_public_host },
     { name = "HTTP_PROTOCOL", value = "https" },
@@ -304,54 +302,14 @@ locals {
     { name = "REDIS_HOST", value = module.elasticache.primary_endpoint_address },
     { name = "REDIS_PORT", value = tostring(module.elasticache.port) },
     { name = "CLICKHOUSE_HOST", value = module.clickhouse.http_dns_name },
-    # @clickhouse/client (Common/Server/Infrastructure/ClickhouseDatabase.ts)
-    # is an HTTP-only client library — it builds its base URL as
-    # "http(s)://<CLICKHOUSE_HOST>:<CLICKHOUSE_PORT>" and issues plain HTTP
-    # requests (see ClickhouseConfig.ts: `(ClickhousePort || 8123)`, i.e. its
-    # own fallback is 8123). It never speaks ClickHouse's native binary
-    # protocol, so this MUST be ClickHouse's HTTP interface port (8123), not
-    # the native protocol port (9000) — sending HTTP requests to the native
-    # port gets no valid HTTP response and the client hangs/retries forever
-    # with no clear error surfaced.
     { name = "CLICKHOUSE_PORT", value = "8123" },
     { name = "CLICKHOUSE_DATABASE", value = "oneuptime" },
     { name = "CLICKHOUSE_USER", value = "oneuptime" },
-    # Required by nginx's default.conf.template (Nginx/default.conf.template
-    # in the upstream repo), which does `set $backend_app
-    # http://${SERVER_APP_HOSTNAME}:${APP_PORT};` and the equivalent for
-    # home. If these are absent, envsubst leaves the literal "${VAR}" text in
-    # place and nginx then fails with "unknown ... variable" trying to parse
-    # it as an nginx variable reference. Hostnames match the ECS Service
-    # Connect `dns_name` (== each service's `var.name`, see
-    # modules/ecs-service/main.tf) so these resolve inside the Cloud Map
-    # namespace. Also applied to every service (not just nginx) since the
-    # app/worker Node processes read the same vars for internal URLs (see
-    # Common/Server/EnvironmentConfig.ts upstream) and otherwise silently
-    # fall back to "localhost".
     { name = "SERVER_APP_HOSTNAME", value = "app" },
     { name = "SERVER_HOME_HOSTNAME", value = "home" },
     { name = "APP_PORT", value = tostring(var.service_sizing["app"].container_port) },
     { name = "HOME_PORT", value = tostring(var.service_sizing["home"].container_port) },
-    # Referenced unconditionally in default.conf.template
-    # (`set $billing_enabled ${BILLING_ENABLED};`); unlike
-    # NGINX_INGEST_ACCESS_LOG this has no internal nginx-side fallback map,
-    # so it must always be set to avoid the same "unknown variable" failure.
     { name = "BILLING_ENABLED", value = "false" },
-    # App/Index.ts (and Workers/Index.ts) run full TypeORM schema sync +
-    # Postgres/ClickHouse data migrations on every boot UNLESS this is
-    # explicitly "false" (Common/Server/EnvironmentConfig.ts:
-    # `RunDatabaseMigrationsOnBoot = process.env["RUN_DATABASE_MIGRATIONS_ON_BOOT"]
-    # !== "false"` — i.e. it defaults to true). Upstream's Helm chart always
-    # runs migrations exactly once in a dedicated one-off `migrate` Job (see
-    # migrate-job.yaml) and sets this to "false" on every runtime pod
-    # (app/worker/nginx) specifically to prevent that: with it unset, every
-    # app/worker replica/redeploy independently runs migrations against the
-    # same schema with no coordinating advisory lock, which can race,
-    # deadlock on DDL locks, or simply leave a replica silently hung mid-
-    # migration with no further log output (exactly the "socket hang up" /
-    # blank-after-boot symptom this repo hit). The `migrate` standalone ECS
-    # task definition below (run manually, once, via `aws ecs run-task`)
-    # is this repo's equivalent of that Job.
     { name = "RUN_DATABASE_MIGRATIONS_ON_BOOT", value = "false" },
   ]
 
@@ -361,40 +319,16 @@ locals {
     { name = "DATABASE_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:DATABASE_PASSWORD::" },
     { name = "REDIS_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:REDIS_AUTH_TOKEN::" },
     { name = "CLICKHOUSE_PASSWORD", valueFrom = "${aws_secretsmanager_secret.this.arn}:CLICKHOUSE_PASSWORD::" },
-    # ElastiCache Redis requires TLS (transit_encryption_enabled = true) —
-    # this is a dedicated, non-JSON secret (see aws_secretsmanager_secret.redis_tls_ca
-    # above) specifically so its PEM newlines survive intact; referencing it
-    # here with no ":key::" suffix pulls the ENTIRE secret string verbatim,
-    # unlike the ":KEY::" JSON-field references above.
     { name = "REDIS_TLS_CA", valueFrom = aws_secretsmanager_secret.redis_tls_ca.arn },
   ]
 
   # Per-service env var overrides, merged on top of common_environment.
-  # nginx's entrypoint (Nginx/envsubst-on-templates.sh in the upstream repo)
-  # runs `envsubst` against its config template, which references
-  # NGINX_LISTEN_ADDRESS/NGINX_LISTEN_OPTIONS directly in `listen` directives
-  # (see Nginx/default.conf.template). envsubst only replaces variables that
-  # are actually *set* in the environment, even to an empty string — leaving
-  # them unset means the literal "${NGINX_LISTEN_ADDRESS}" text is left in
-  # nginx.conf, which nginx then fails to parse as a `listen` address. The
-  # upstream Helm chart always sets both (usually to "") for exactly this
-  # reason — see HelmChart/Public/oneuptime/templates/nginx.yaml.
-  # probe/runner hard-exit at startup (Probe/Config.ts: `if
-  # (!process.env["PROBE_INGEST_URL"] && !process.env["ONEUPTIME_URL"]) {
-  # process.exit(1) }`) unless ONEUPTIME_URL points at the app service. The
-  # upstream Helm chart sets this explicitly per-service (probe.yaml /
-  # runner.yaml) to the in-cluster app Service URL — mirrored here via the
-  # ECS Service Connect DNS name for "app".
   oneuptime_internal_url = "http://app:${var.service_sizing["app"].container_port}"
 
   per_service_environment = {
     nginx = [
       { name = "NGINX_LISTEN_ADDRESS", value = "" },
       { name = "NGINX_LISTEN_OPTIONS", value = "" },
-      # Confirmed necessary in a live deployment - without this nginx opens a
-      # fresh upstream connection per request instead of reusing a pooled
-      # keepalive connection to app/home, which was contributing to
-      # timeouts/slow responses under load.
       { name = "NGINX_UPSTREAM_KEEPALIVE", value = "true" },
     ]
     probe = [
@@ -404,11 +338,6 @@ locals {
     runner = [
       { name = "ONEUPTIME_URL", value = local.oneuptime_internal_url },
     ]
-    # "worker" is a separate ECS service running the SAME app image
-    # specifically to consume BullMQ queues (see image_repo above) — without
-    # this, "app" ALSO consumes queues by default (DisableQueueWorkers
-    # defaults to false upstream), duplicating/racing queue consumption
-    # between the two services. Confirmed necessary in a live deployment.
     app = [
       { name = "DISABLE_QUEUE_WORKERS", value = "true"},
       { name = "PORT", value= "3002" },
@@ -505,16 +434,6 @@ resource "aws_ecs_task_definition" "migrate" {
       readonlyRootFilesystem = false
       workingDirectory       = "/usr/src/app"
       command                = ["npm", "run", "migrate"]
-      # RUN_DATABASE_MIGRATIONS_ON_BOOT=false (in common_environment) has no
-      # effect on this script — App/Migrate.ts always runs migrations
-      # unconditionally when invoked directly via `npm run migrate`.
-      # CLICKHOUSE_HOST is overridden here (vs. common_environment's
-      # "clickhouse" Service Connect alias) because this task is started
-      # standalone via `aws ecs run-task`, not as part of an
-      # aws_ecs_service — it's never a Service Connect client, so the
-      # "clickhouse" short name doesn't resolve for it (getaddrinfo
-      # ENOTFOUND). The classic Cloud Map discovery record does resolve
-      # from any task in the VPC regardless of Service Connect membership.
       environment = concat(
         [for e in local.common_environment : e if e.name != "CLICKHOUSE_HOST"],
         [{ name = "CLICKHOUSE_HOST", value = module.clickhouse.native_discovery_dns_name }]

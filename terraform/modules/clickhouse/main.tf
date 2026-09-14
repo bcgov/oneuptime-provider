@@ -1,8 +1,3 @@
-# Self-hosted ClickHouse on Fargate, backed by EFS for persistence — there is
-# no AWS-managed ClickHouse offering. Single instance only: no
-# replication/Keeper quorum, no automatic failover. Acceptable for this
-# repo's dev/small scope; see docs/deploy-aws.md's "Known limitations"
-# section before using this for anything you can't afford to lose/rebuild.
 resource "aws_security_group" "this" {
   name        = "${var.name}-clickhouse"
   description = "ClickHouse SG for ${var.name}: ingress from OneUptime app/worker ECS tasks, plus NFS from itself for EFS."
@@ -151,19 +146,6 @@ resource "aws_ecs_task_definition" "this" {
   ])
 }
 
-# Classic Cloud Map service discovery registration, IN ADDITION to Service
-# Connect below. Service Connect's DNS names (e.g. "clickhouse") only
-# resolve for tasks that are themselves Service Connect *clients* — i.e.
-# members of an aws_ecs_service with its own service_connect_configuration.
-# Standalone one-off tasks started via `aws ecs run-task` (e.g. this repo's
-# `migrate` task definition, which needs to reach ClickHouse to run its
-# telemetry-table migrations) are NOT Service Connect clients and get
-# `getaddrinfo ENOTFOUND clickhouse` trying to resolve that name. Classic
-# Cloud Map service discovery creates a real Route 53 private-hosted-zone A
-# record that any task in the VPC can resolve via normal DNS, regardless of
-# Service Connect membership — used as CLICKHOUSE_HOST for the migrate task
-# only (see per_service_environment in the root main.tf); other services
-# keep using the Service Connect "clickhouse" alias as before.
 resource "aws_service_discovery_service" "native" {
   name = "clickhouse-direct"
 

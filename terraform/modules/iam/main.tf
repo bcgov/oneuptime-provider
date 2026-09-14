@@ -50,12 +50,7 @@ resource "aws_iam_role" "task" {
   tags               = var.tags
 }
 
-# Grants every task role the permissions ECS Exec needs (SSM Session Manager
-# data channel to/from the container). This lets you shell into a running
-# task with `aws ecs execute-command ... --interactive --command "/bin/sh"`
-# for live debugging (ps, netstat, strace, etc.) instead of relying solely on
-# whatever the app happens to log. Requires `--enable-execute-command` on the
-# corresponding `aws ecs run-task`/`update-service` call as well.
+
 resource "aws_iam_role_policy" "task_exec_ssmmessages" {
   for_each = var.service_names
 

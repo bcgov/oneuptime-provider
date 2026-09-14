@@ -15,12 +15,6 @@ variable "name" {
   default     = "oneuptime"
 }
 
-variable "certificate" {
-  description = "AWS cert"
-  type = string
-  default = ""  
-}
-
 # --- Platform-managed networking --------------------------------------------
 # VPCs and subnets are provisioned and owned by the platform team and cannot
 # be created or modified by users (no `aws_vpc`/`aws_subnet` resources, and no
