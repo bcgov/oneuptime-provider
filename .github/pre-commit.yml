@@ -1,0 +1,39 @@
+name: Check Commit Conventions
+
+on: push
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install asdf requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libreadline-dev uuid-dev
+      - name: Setup asdf
+        uses: asdf-vm/actions/setup@v4
+      - name: Cache tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            /home/runner/.asdf
+          key: ${{ runner.os }}-${{ hashFiles('**/.tool-versions') }}
+
+      - name: Install asdf
+        uses: asdf-vm/actions/install@v4
+
+      - name: Rerun Pre-Commit Hooks on CI
+        run: |
+          pip install -r requirements.txt
+          asdf reshim
+          pre-commit run --color=always --show-diff-on-failure --all-files
+
+  commitlint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: wagoid/commitlint-github-action@v5
