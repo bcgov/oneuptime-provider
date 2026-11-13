@@ -286,7 +286,6 @@ locals {
     home   = "home"
     worker = "app"
     probe  = "probe"
-    runner = "runner"
   }
 
   common_environment = [
@@ -335,12 +334,9 @@ locals {
       { name = "ONEUPTIME_URL", value = local.oneuptime_internal_url },
       { name = "PROBE_NAME", value = "probe mcprobeface" },
     ]
-    runner = [
-      { name = "ONEUPTIME_URL", value = local.oneuptime_internal_url },
-    ]
     app = [
-      { name = "DISABLE_QUEUE_WORKERS", value = "true"},
-      { name = "PORT", value= "3002" },
+      { name = "DISABLE_QUEUE_WORKERS", value = "true" },
+      { name = "PORT", value = "3002" },
     ]
   }
 
@@ -434,9 +430,23 @@ resource "aws_ecs_task_definition" "migrate" {
       readonlyRootFilesystem = false
       workingDirectory       = "/usr/src/app"
       command                = ["npm", "run", "migrate"]
+      # Filters out CLICKHOUSE_HOST (replaced with the Cloud Map discovery
+      # name below, since Service Connect aliases aren't reachable from a
+      # standalone run-task) AND RUN_DATABASE_MIGRATIONS_ON_BOOT (every other
+      # service pins this to "false" so runtime replicas never race each
+      # other running schema migrations on boot — see the comment above this
+      # resource — but this dedicated migrate Job is the one place that MUST
+      # run them, per App/Migrate.ts: "RUN_DATABASE_MIGRATIONS_ON_BOOT is left
+      # unset (true) for this process, so schema migrations run here." Without
+      # this override, migrationsRun is false, no schema tables ever get
+      # created, and the first data migration fails with
+      # 'relation "DataMigrations" does not exist').
       environment = concat(
-        [for e in local.common_environment : e if e.name != "CLICKHOUSE_HOST"],
-        [{ name = "CLICKHOUSE_HOST", value = module.clickhouse.native_discovery_dns_name }]
+        [for e in local.common_environment : e if !contains(["CLICKHOUSE_HOST", "RUN_DATABASE_MIGRATIONS_ON_BOOT"], e.name)],
+        [
+          { name = "CLICKHOUSE_HOST", value = module.clickhouse.native_discovery_dns_name },
+          { name = "RUN_DATABASE_MIGRATIONS_ON_BOOT", value = "true" },
+        ]
       )
       secrets = local.common_secrets
       logConfiguration = {

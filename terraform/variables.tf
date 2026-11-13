@@ -69,11 +69,17 @@ variable "enable_alb_access_logs" {
 variable "service_sizing" {
   description = <<-EOT
     Per-service Fargate task sizing and desired count. Keys must match the
-    services wired up in main.tf (nginx, app, home, worker, probe, runner,
+    services wired up in main.tf (nginx, app, home, worker, probe,
     clickhouse). `container_port` is null for services that take no inbound
-    traffic (worker, probe, runner) — see each upstream chart service's
+    traffic (worker, probe) — see each upstream chart service's
     `<service>.ports.http` in the OneUptime Helm chart's values.yaml to
     confirm the exact port before deploying.
+
+    `runner` is intentionally omitted — it is not required for this
+    deployment and its ECS Service Connect Envoy proxy sidecar was found to
+    crash-loop, generating excessive AWS Config `ConfigurationItemRecorded`
+    charges from constant task/ENI/Service Connect churn (see
+    docs/config-cost.md).
   EOT
   type = map(object({
     cpu            = number
@@ -91,7 +97,6 @@ variable "service_sizing" {
     home   = { cpu = 512, memory = 1024, desired_count = 1, container_port = 3003 }
     worker = { cpu = 1024, memory = 2048, desired_count = 1, container_port = 3002 }
     probe  = { cpu = 512, memory = 1024, desired_count = 1, container_port = 3005 }
-    runner = { cpu = 256, memory = 512, desired_count = 1, container_port = 3006 }
   }
 }
 
