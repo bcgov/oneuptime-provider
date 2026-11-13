@@ -147,3 +147,9 @@ variable "tags" {
     CostTracking = "oneuptime"
   }
 }
+
+variable "redis_tls_ca_pem" {
+  description = "PEM content of the CA certificate (e.g. AmazonRootCA1) used by clients to verify ElastiCache Redis TLS. Supply via git-ignored terraform.tfvars or TF_VAR_redis_tls_ca_pem; not committed to the repo."
+  type        = string
+  sensitive   = true
+}

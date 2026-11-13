@@ -199,9 +199,7 @@ resource "aws_secretsmanager_secret" "redis_tls_ca" {
 
 resource "aws_secretsmanager_secret_version" "redis_tls_ca" {
   secret_id     = aws_secretsmanager_secret.redis_tls_ca.id
-  secret_string = <<-EOT
-
-  EOT
+  secret_string = var.redis_tls_ca_pem
 }
 
 ###############################################################################
