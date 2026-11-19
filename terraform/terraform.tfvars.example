@@ -18,6 +18,15 @@ subnet_b = "Dev-App-B"
 # not provisioned by this repo.
 acm_certificate_arn = "arn:aws:acm:ca-central-1:123456789012:certificate/CHANGE-ME"
 
+# PEM of AmazonRootCA1 (https://www.amazontrust.com/repository/AmazonRootCA1.pem)
+# used for Redis TLS. terraform.tfvars is git-ignored; alternatively export
+# TF_VAR_redis_tls_ca_pem="$(cat AmazonRootCA1.pem)".
+redis_tls_ca_pem = <<-EOT
+  -----BEGIN CERTIFICATE-----
+  CHANGE-ME
+  -----END CERTIFICATE-----
+EOT
+
 # Public hostname OneUptime is browsed at, and the label used for the ALB's
 # PublicHost tag (must be the hostname's first label, no dots).
 oneuptime_public_host = "oneuptime.b46814-dev.stratus.cloud.gov.bc.ca"
